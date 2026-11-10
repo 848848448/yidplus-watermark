@@ -14,17 +14,27 @@ def req(method, path, data=None, headers=None, timeout=120):
     with urllib.request.urlopen(r, timeout=timeout) as resp:
         return resp.status, resp.read()
 
-st, body = req("GET", "/api/wm/jobs")
-j = json.loads(body)
+try:
+    st, body = req("GET", "/api/wm/jobs")
+    j = json.loads(body)
+except Exception as e:
+    print("control site not reachable:", str(e)[:120]); sys.exit(0)
 jobs = j.get("jobs") or []
 print("jobs:", len(jobs))
 if not jobs:
     sys.exit(0)
 wm = j.get("wm") or {}
-if not shutil.which("ffmpeg"):
-    subprocess.run(["sudo", "apt-get", "update", "-qq"], check=False)
-    subprocess.run(["sudo", "apt-get", "install", "-y", "-qq", "ffmpeg"], check=True)
-st, logo = req("GET", "/api/wm/logo")
+try:
+    if not shutil.which("ffmpeg"):
+        subprocess.run(["sudo", "apt-get", "update", "-qq"], check=False)
+        subprocess.run(["sudo", "apt-get", "install", "-y", "-qq", "ffmpeg"], check=True)
+    st, logo = req("GET", "/api/wm/logo")
+except Exception as e:
+    print("setup failed:", str(e)[:200])
+    for job in jobs:
+        try: req("POST", "/api/wm/fail?id=" + job["id"], data=json.dumps({"error": "render setup failed"}).encode(), headers={"content-type": "application/json"})
+        except Exception: pass
+    sys.exit(0)
 open("logo.png", "wb").write(logo)
 
 size = max(5, min(40, int(wm.get("size") or 11)))
