@@ -31,7 +31,7 @@ jobs:
       - name: Render waiting videos
         env:
           WM_KEY: ${{ secrets.WM_KEY }}
-          CONTROL_URL: ${{ vars.CONTROL_URL }}
+          CONTROL_URL: ${{ secrets.CONTROL_URL }}
         run: python3 watermark.py
       - name: Keep the schedule alive (GitHub pauses schedules after 60 quiet days)
         run: |
