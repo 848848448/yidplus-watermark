@@ -16,6 +16,18 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+      - name: ffmpeg (cached static build)
+        uses: actions/cache@v4
+        with:
+          path: ~/ffmpeg
+          key: ffmpeg-static-v1
+      - name: Put ffmpeg on PATH
+        run: |
+          if [ ! -x "$HOME/ffmpeg/ffmpeg" ]; then
+            mkdir -p "$HOME/ffmpeg"
+            curl -sSL --retry 3 https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz | tar xJ -C "$HOME/ffmpeg" --strip-components=1 || true
+          fi
+          echo "$HOME/ffmpeg" >> "$GITHUB_PATH"
       - name: Render waiting videos
         env:
           WM_KEY: ${{ secrets.WM_KEY }}
