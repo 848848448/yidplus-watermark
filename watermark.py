@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Pull watermark jobs from the YID PLUS control site, render, upload. Prints no secrets."""
+"""Pull watermark jobs from the YID PLUS control site, render, upload.
+The logs of this public repo are public: print counts only (no URLs, ids, captions or names)."""
 import json, os, subprocess, sys, time, urllib.request, shutil
 
 BASE = (os.environ.get("CONTROL_URL") or "https://control.yidplus.com").rstrip("/")
@@ -18,7 +19,7 @@ try:
     st, body = req("GET", "/api/wm/jobs")
     j = json.loads(body)
 except Exception as e:
-    print("control site not reachable:", str(e)[:120]); sys.exit(0)
+    print("control site not reachable:", type(e).__name__); sys.exit(0)
 jobs = j.get("jobs") or []
 print("jobs:", len(jobs))
 if not jobs:
@@ -30,7 +31,7 @@ try:
         subprocess.run(["sudo", "apt-get", "install", "-y", "-qq", "ffmpeg"], check=True)
     st, logo = req("GET", "/api/wm/logo")
 except Exception as e:
-    print("setup failed:", str(e)[:200])
+    print("setup failed:", type(e).__name__)
     for job in jobs:
         try: req("POST", "/api/wm/fail?id=" + job["id"], data=json.dumps({"error": "render setup failed"}).encode(), headers={"content-type": "application/json"})
         except Exception: pass
@@ -62,9 +63,9 @@ for job in jobs:
         subprocess.run(cmd, check=True, timeout=600)
         data = open("out.mp4", "rb").read()
         st, _ = req("PUT", "/api/wm/done?id=" + jid, data=data, headers={"content-type": "video/mp4"}, timeout=300)
-        print(f"done {jid[:8]} {W}x{Hh} {len(data)//1024} KB in {time.time()-t0:.1f}s")
+        print(f"rendered 1 video in {time.time()-t0:.0f}s")
     except Exception as e:
-        print(f"failed {jid[:8]}: {str(e)[:200]}")
+        print("1 video failed:", type(e).__name__)
         try: req("POST", "/api/wm/fail?id=" + jid, data=json.dumps({"error": str(e)[:200]}).encode(), headers={"content-type": "application/json"})
         except Exception: pass
     for f in ("in.mp4", "out.mp4"):
