@@ -46,7 +46,9 @@ for job in jobs:
     jid = job["id"]
     t0 = time.time()
     try:
-        urllib.request.urlretrieve(job["src"], "in.mp4")
+        rq = urllib.request.Request(job["src"], headers={"user-agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36", "referer": "https://yidstatus.com/"})
+        with urllib.request.urlopen(rq, timeout=180) as resp, open("in.mp4", "wb") as fo:
+            shutil.copyfileobj(resp, fo)
         pr = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height", "-of", "json", "in.mp4"], capture_output=True, text=True, check=True)
         s = json.loads(pr.stdout)["streams"][0]
         W, Hh = int(s["width"]), int(s["height"])
