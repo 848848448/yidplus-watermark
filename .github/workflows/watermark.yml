@@ -1,0 +1,32 @@
+name: watermark
+# Every 5 minutes: ask control.yidplus.com for videos waiting for the logo,
+# burn it in with ffmpeg, upload the result. No jobs = exits in seconds.
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+concurrency:
+  group: watermark
+  cancel-in-progress: false
+permissions:
+  contents: write
+jobs:
+  render:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Render waiting videos
+        env:
+          WM_KEY: ${{ secrets.WM_KEY }}
+          CONTROL_URL: ${{ vars.CONTROL_URL }}
+        run: python3 watermark.py
+      - name: Keep the schedule alive (GitHub pauses schedules after 60 quiet days)
+        run: |
+          last=$(git log -1 --format=%ct)
+          now=$(date +%s)
+          if [ $((now - last)) -gt 2592000 ]; then
+            date -u +%FT%TZ > .keepalive
+            git config user.name "yidplus-bot"; git config user.email "bot@yidplus.com"
+            git add .keepalive && git commit -m "keepalive" && git push || true
+          fi
