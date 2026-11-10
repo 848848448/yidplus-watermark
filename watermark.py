@@ -15,12 +15,20 @@ def req(method, path, data=None, headers=None, timeout=120):
     with urllib.request.urlopen(r, timeout=timeout) as resp:
         return resp.status, resp.read()
 
-try:
-    st, body = req("GET", "/api/wm/jobs")
-    j = json.loads(body)
-except Exception as e:
-    print("control site not reachable:", type(e).__name__); sys.exit(0)
-jobs = j.get("jobs") or []
+def get_jobs():
+    try:
+        st, body = req("GET", "/api/wm/jobs")
+        return json.loads(body)
+    except Exception as e:
+        print("control site not reachable:", type(e).__name__)
+        return {}
+
+# Keep looking for ~4 minutes (every 20 s) so a video waits seconds, not until the next scheduled run.
+deadline = time.time() + 240
+j = get_jobs(); jobs = j.get("jobs") or []
+while not jobs and time.time() < deadline:
+    time.sleep(20)
+    j = get_jobs(); jobs = j.get("jobs") or []
 print("jobs:", len(jobs))
 if not jobs:
     sys.exit(0)
