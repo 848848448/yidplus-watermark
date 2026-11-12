@@ -1,8 +1,10 @@
 name: site-watermark
-# yidplus.com uploads: every 5 minutes ask https://yidplus.com/api/wm/jobs for new videos (and photos
-# that arrived without the mark, e.g. from the Android app), burn "Yidplus.com" in with ffmpeg and
-# upload the result (it replaces the file in place). Nothing waiting = it checks for ~4 min, then exits.
-# Separate from watermark.yml (the control site's logo job); logs print counts only.
+# yidplus.com uploads: ask https://yidplus.com/api/wm/jobs every 30 s for new videos (and photos that
+# arrived without the mark, e.g. from the Android app), burn "Yidplus.com" in, upload the result (it
+# replaces the file in place only after it was checked). Each run watches for ~50 min, then starts the
+# next run itself, because GitHub runs "*/5" schedules only every few hours on this repo; the schedule
+# stays as a backup if that chain ever breaks. Public repo = Actions minutes are free.
+# Separate from watermark.yml (the control site's logo job). Logs print counts only.
 on:
   schedule:
     - cron: "*/5 * * * *"
@@ -12,10 +14,11 @@ concurrency:
   cancel-in-progress: false
 permissions:
   contents: read
+  actions: write
 jobs:
   render:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - name: ffmpeg (cached static build)
@@ -23,15 +26,22 @@ jobs:
         with:
           path: ~/ffmpeg
           key: ffmpeg-static-v1
-      - name: Put ffmpeg on PATH (+ a bold font for the mark)
+      - name: Put ffmpeg on PATH (+ Pillow and a bold font for the mark)
         run: |
           if [ ! -x "$HOME/ffmpeg/ffmpeg" ]; then
             mkdir -p "$HOME/ffmpeg"
             curl -sSL --retry 3 https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz | tar xJ -C "$HOME/ffmpeg" --strip-components=1 || true
           fi
           echo "$HOME/ffmpeg" >> "$GITHUB_PATH"
+          python3 -m pip install --quiet --disable-pip-version-check pillow || pip install --quiet pillow
           [ -f /usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf ] || (sudo apt-get update -qq && sudo apt-get install -y -qq fonts-dejavu-core) || true
-      - name: Mark waiting uploads
+      - name: Mark waiting uploads (~50 min)
         env:
           SITE_WM_KEY: ${{ secrets.SITE_WM_KEY }}
+          WM_LOOK_SECONDS: "3000"
         run: python3 site_watermark.py
+      - name: Start the next run
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run site.yml --ref main -R "$GITHUB_REPOSITORY" || true

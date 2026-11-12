@@ -37,16 +37,54 @@ def fail(jid, err):
     try: req("POST", "/api/wm/fail?id=" + jid, data=json.dumps({"error": str(err)[:200]}).encode(), headers={"content-type": "application/json"})
     except Exception: pass
 
-def mark_filter(w, h):
+def mark_png(w, h, path="mark.png"):
     # Same look as the website's photo mark: white bold "Yidplus.com" on a soft dark box,
-    # bottom-right, sized from the picture's area (~4.8% of a 1600x1200 frame's height).
+    # bottom-right, sized from the picture's area (~48 px on a 1600x1200 frame).
+    # Drawn with Pillow and laid over with ffmpeg's overlay (the static ffmpeg has no drawtext).
+    from PIL import Image, ImageDraw, ImageFont
     fs = int(round((w * h) ** 0.5 * 0.035))
     fs = max(14, min(fs, int(h * 0.09), int(w * 0.07)))
-    pad = max(4, int(fs * 0.3))
-    m = int(fs * 0.55)
-    font = ("fontfile=" + FONT + ":") if FONT else ""
-    return ("drawtext=" + font + "text='Yidplus.com':fontsize=%d:fontcolor=white@0.92:"
-            "box=1:boxcolor=black@0.38:boxborderw=%d:x=w-tw-%d:y=h-th-%d" % (fs, pad, m + pad, m + pad // 2))
+    font = ImageFont.truetype(FONT, fs) if FONT else ImageFont.load_default()
+    text = "Yidplus.com"
+    l, t, r, b = ImageDraw.Draw(Image.new("RGBA", (1, 1))).textbbox((0, 0), text, font=font)
+    tw, th = r - l, b - t
+    pad = fs * 0.55
+    bw, bh = int(tw + pad), int(fs + pad * 0.7)
+    im = Image.new("RGBA", (bw, bh), (0, 0, 0, 97))            # rgba(0,0,0,.38)
+    d = ImageDraw.Draw(im)
+    d.text(((bw - tw) / 2 - l, (bh - th) / 2 - t), text, font=font, fill=(255, 255, 255, 235))  # .92
+    im.save(path)
+    margin_x = int(pad)          # box right edge ~ text end + pad, like the canvas version
+    margin_y = int(pad * 0.3)
+    return path, margin_x, margin_y
+
+def mark_filter(w, h):
+    path, mx, my = mark_png(w, h)
+    return path, "overlay=W-w-%d:H-h-%d" % (mx, my)
+
+def run(cmd, timeout):
+    p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    if p.returncode != 0:
+        raise RuntimeError("ffmpeg: " + (p.stderr or "").strip().replace("in.bin", "input")[-300:])
+
+def media_info(path):
+    p = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration:stream=codec_type",
+                        "-of", "json", path], capture_output=True, text=True, timeout=60)
+    j = json.loads(p.stdout or "{}")
+    types = [s.get("codec_type") for s in j.get("streams") or []]
+    try: dur = float((j.get("format") or {}).get("duration") or 0)
+    except Exception: dur = 0.0
+    return dur, ("video" in types), ("audio" in types)
+
+def verify_video(src, dst):
+    # Only swap when the marked copy is sound: it decodes, has the same length (within 1 s or 3 %),
+    # and has sound if the original had sound. Otherwise the original stays untouched.
+    d0, v0, a0 = media_info(src)
+    d1, v1, a1 = media_info(dst)
+    if not v1: raise RuntimeError("marked video has no picture")
+    if a0 and not a1: raise RuntimeError("marked video lost its sound")
+    if d0 and abs(d1 - d0) > max(1.0, d0 * 0.03): raise RuntimeError("marked video length %.1fs != %.1fs" % (d1, d0))
+    run(["ffmpeg", "-v", "error", "-i", dst, "-t", "4", "-f", "null", "-"], 120)   # it plays
 
 def probe(path):
     pr = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
@@ -66,43 +104,52 @@ def probe(path):
     comment = ((j.get("format") or {}).get("tags") or {}).get("comment") or ""
     return w, h, comment
 
+MAX_SECONDS = 15 * 60   # longer videos are left as uploaded (logged as failed) to keep runs short
+
 def render_video(src, dst):
     w, h, comment = probe(src)
     if TAG in comment: return "skip"
+    dur, _, _ = media_info(src)
+    if dur > MAX_SECONDS: raise RuntimeError("video longer than %d min, left as uploaded" % (MAX_SECONDS // 60))
     if not w or not h: raise RuntimeError("no video stream")
     for crf, cap in ((23, None), (28, 1280), (32, 854)):
-        sw, sh = w, h
-        vf = "scale=trunc(iw/2)*2:trunc(ih/2)*2,"
+        sw, sh = w // 2 * 2, h // 2 * 2
         if cap and max(w, h) > cap:
             sc = float(cap) / max(w, h)
             sw, sh = int(w * sc) // 2 * 2, int(h * sc) // 2 * 2
-            vf = "scale=%d:%d," % (sw, sh)
-        vf += mark_filter(sw, sh) + ",format=yuv420p"
-        cmd = ["ffmpeg", "-y", "-v", "error", "-i", src, "-vf", vf, "-map", "0:v:0", "-map", "0:a:0?",
+        mpath, ov = mark_filter(sw, sh)
+        fc = "[0:v]scale=%d:%d,setsar=1[b];[b][1:v]%s,format=yuv420p[v]" % (sw, sh, ov)
+        cmd = ["ffmpeg", "-y", "-v", "error", "-i", src, "-i", mpath, "-filter_complex", fc, "-map", "[v]", "-map", "0:a:0?",
                "-c:v", "libx264", "-preset", "veryfast", "-crf", str(crf), "-c:a", "aac", "-b:a", "128k",
                "-movflags", "+faststart", "-metadata", "comment=" + TAG, dst]
-        subprocess.run(cmd, check=True, timeout=900)
+        run(cmd, 1800)
+        verify_video(src, dst)
         if os.path.getsize(dst) <= MAX_OUT: return "video/mp4"
     raise RuntimeError("result too big")
 
 def render_image(src, dst_base, ct):
+    # Photos are done with Pillow (it honours the phone's EXIF rotation, which ffmpeg ignores).
+    from PIL import Image, ImageOps
     data = open(src, "rb").read()
     if data.endswith(TRAILER): return "skip", None
-    pr = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height",
-                         "-of", "json", src], capture_output=True, text=True, timeout=60)
-    s = (json.loads(pr.stdout or "{}").get("streams") or [{}])[0]
-    w, h = int(s.get("width") or 0), int(s.get("height") or 0)
-    if not w or not h: raise RuntimeError("not a readable picture")
-    vf = ""
-    if max(w, h) > 1600:
-        sc = 1600.0 / max(w, h); w, h = int(w * sc) // 2 * 2, int(h * sc) // 2 * 2
-        vf = "scale=%d:%d," % (w, h)
-    vf += mark_filter(w, h)
+    im = Image.open(src)
+    if getattr(im, "is_animated", False) and getattr(im, "n_frames", 1) > 1: return "skip", None   # keep animation
+    im = ImageOps.exif_transpose(im)
     png = ct == "image/png"
+    im = im.convert("RGBA" if png else "RGB")
+    w, h = im.size
+    if not w or not h: raise RuntimeError("not a readable picture")
+    if max(w, h) > 1600:
+        sc = 1600.0 / max(w, h); im = im.resize((max(1, int(w * sc)), max(1, int(h * sc))), Image.LANCZOS); w, h = im.size
+    mpath, mx, my = mark_png(w, h)
+    mk = Image.open(mpath).convert("RGBA")
+    base = im.convert("RGBA")
+    base.alpha_composite(mk, (w - mk.width - mx, h - mk.height - my))
     dst = dst_base + (".png" if png else ".jpg")
-    cmd = ["ffmpeg", "-y", "-v", "error", "-i", src, "-frames:v", "1", "-vf", vf] + ([] if png else ["-q:v", "3"]) + [dst]
-    subprocess.run(cmd, check=True, timeout=120)
+    if png: base.save(dst, "PNG", optimize=True)
+    else: base.convert("RGB").save(dst, "JPEG", quality=85, optimize=True)
     with open(dst, "ab") as fo: fo.write(TRAILER)
+    Image.open(dst).verify()
     return ("image/png" if png else "image/jpeg"), dst
 
 def main():
@@ -112,9 +159,11 @@ def main():
     # Keep looking for ~4 minutes (every 30 s), so a new upload waits seconds, not a whole schedule gap.
     deadline = time.time() + float(os.environ.get("WM_LOOK_SECONDS") or 240)
     done = failed = skipped = 0
+    tried = set()       # a job that failed is retried on a later run, not in a tight loop
     while True:
-        jobs = get_jobs()
+        jobs = [j for j in get_jobs() if j["id"] not in tried]
         for job in jobs:
+            tried.add(job["id"])
             jid, kind, ct = job["id"], job.get("kind"), (job.get("ct") or "").lower()
             t0 = time.time()
             try:
@@ -134,9 +183,9 @@ def main():
                     print("marked 1 %s in %ds" % (kind, time.time() - t0))
             except Exception as e:
                 failed += 1
-                print("1 %s failed: %s" % (kind, type(e).__name__))
+                print("1 %s failed: %s" % (kind, type(e).__name__))   # public log: no details
                 fail(jid, "%s: %s" % (type(e).__name__, e))
-            for f in ("in.bin", "out.mp4", "out.jpg", "out.png"):
+            for f in ("in.bin", "out.mp4", "out.jpg", "out.png", "mark.png"):
                 try: os.remove(f)
                 except Exception: pass
         if not jobs:
