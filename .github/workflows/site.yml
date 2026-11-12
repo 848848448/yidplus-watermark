@@ -1,9 +1,10 @@
 name: site-watermark
-# yidplus.com uploads: ask https://yidplus.com/api/wm/jobs every 30 s for new videos (and photos that
-# arrived without the mark, e.g. from the Android app), burn "Yidplus.com" in, upload the result (it
-# replaces the file in place only after it was checked). Each run watches for ~50 min, then starts the
-# next run itself, because GitHub runs "*/5" schedules only every few hours on this repo; the schedule
-# stays as a backup if that chain ever breaks. Public repo = Actions minutes are free.
+# yidplus.com uploads: ask https://yidplus.com/api/wm/jobs for new videos (and photos that arrived
+# without the mark, e.g. from the Android app), burn "Yidplus.com" in, upload the result (it replaces
+# the file in place only after it was checked). Short runs only: each run works the queue, exits as
+# soon as it is empty, and never runs longer than 10 min. It never starts another run itself.
+# Triggers: the */5 schedule (GitHub fires it when it fires) and workflow_dispatch (manual, or a
+# debounced call from the site after a video lands - see EVENT_TRIGGER.md, not wired yet).
 # Separate from watermark.yml (the control site's logo job). Logs print counts only.
 on:
   schedule:
@@ -14,11 +15,10 @@ concurrency:
   cancel-in-progress: false
 permissions:
   contents: read
-  actions: write
 jobs:
   render:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - name: ffmpeg (cached static build)
@@ -35,13 +35,10 @@ jobs:
           echo "$HOME/ffmpeg" >> "$GITHUB_PATH"
           python3 -m pip install --quiet --disable-pip-version-check pillow || pip install --quiet pillow
           [ -f /usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf ] || (sudo apt-get update -qq && sudo apt-get install -y -qq fonts-dejavu-core) || true
-      - name: Mark waiting uploads (~50 min)
+      - name: Mark waiting uploads (exit when the queue is empty, 10 min cap)
+        timeout-minutes: 11
         env:
           SITE_WM_KEY: ${{ secrets.SITE_WM_KEY }}
-          WM_LOOK_SECONDS: "3000"
+          WM_LOOK_SECONDS: "0"
+          WM_MAX_SECONDS: "600"
         run: python3 site_watermark.py
-      - name: Start the next run
-        if: always()
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh workflow run site.yml --ref main -R "$GITHUB_REPOSITORY" || true

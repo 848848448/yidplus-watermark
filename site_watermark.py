@@ -156,13 +156,17 @@ def main():
     if not shutil.which("ffmpeg"):
         subprocess.run(["sudo", "apt-get", "update", "-qq"], check=False)
         subprocess.run(["sudo", "apt-get", "install", "-y", "-qq", "ffmpeg"], check=True)
-    # Keep looking for ~4 minutes (every 30 s), so a new upload waits seconds, not a whole schedule gap.
-    deadline = time.time() + float(os.environ.get("WM_LOOK_SECONDS") or 240)
+    # Work the queue and exit as soon as it is empty (WM_LOOK_SECONDS = extra idle wait, 0 = none).
+    # WM_MAX_SECONDS is a hard cap: no new job is started after it; the next run picks up the rest.
+    start = time.time()
+    deadline = start + float(os.environ.get("WM_LOOK_SECONDS") or 0)
+    hard_stop = start + float(os.environ.get("WM_MAX_SECONDS") or 600)
     done = failed = skipped = 0
     tried = set()       # a job that failed is retried on a later run, not in a tight loop
     while True:
         jobs = [j for j in get_jobs() if j["id"] not in tried]
         for job in jobs:
+            if time.time() > hard_stop: break
             tried.add(job["id"])
             jid, kind, ct = job["id"], job.get("kind"), (job.get("ct") or "").lower()
             t0 = time.time()
@@ -188,9 +192,11 @@ def main():
             for f in ("in.bin", "out.mp4", "out.jpg", "out.png", "mark.png"):
                 try: os.remove(f)
                 except Exception: pass
+        if time.time() > hard_stop:
+            print("time cap reached, the rest waits for the next run"); break
         if not jobs:
-            if time.time() > deadline: break
-            time.sleep(30)
+            if time.time() >= deadline: break
+            time.sleep(min(30, max(1, deadline - time.time())))
     print("done:", done, "skipped:", skipped, "failed:", failed)
 
 if __name__ == "__main__":
