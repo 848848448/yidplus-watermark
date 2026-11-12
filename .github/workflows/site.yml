@@ -39,6 +39,8 @@ jobs:
         timeout-minutes: 11
         env:
           SITE_WM_KEY: ${{ secrets.SITE_WM_KEY }}
-          WM_LOOK_SECONDS: "0"
+          # A run started by the site (workflow_dispatch) keeps looking 150 s after the queue is empty:
+          # longer than the site's 2-min debounce, so an upload that skipped the call is still caught.
+          WM_LOOK_SECONDS: ${{ github.event_name == 'workflow_dispatch' && '150' || '0' }}
           WM_MAX_SECONDS: "600"
         run: python3 site_watermark.py
