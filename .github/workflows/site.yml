@@ -1,0 +1,37 @@
+name: site-watermark
+# yidplus.com uploads: every 5 minutes ask https://yidplus.com/api/wm/jobs for new videos (and photos
+# that arrived without the mark, e.g. from the Android app), burn "Yidplus.com" in with ffmpeg and
+# upload the result (it replaces the file in place). Nothing waiting = it checks for ~4 min, then exits.
+# Separate from watermark.yml (the control site's logo job); logs print counts only.
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+concurrency:
+  group: site-watermark
+  cancel-in-progress: false
+permissions:
+  contents: read
+jobs:
+  render:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: ffmpeg (cached static build)
+        uses: actions/cache@v4
+        with:
+          path: ~/ffmpeg
+          key: ffmpeg-static-v1
+      - name: Put ffmpeg on PATH (+ a bold font for the mark)
+        run: |
+          if [ ! -x "$HOME/ffmpeg/ffmpeg" ]; then
+            mkdir -p "$HOME/ffmpeg"
+            curl -sSL --retry 3 https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz | tar xJ -C "$HOME/ffmpeg" --strip-components=1 || true
+          fi
+          echo "$HOME/ffmpeg" >> "$GITHUB_PATH"
+          [ -f /usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf ] || (sudo apt-get update -qq && sudo apt-get install -y -qq fonts-dejavu-core) || true
+      - name: Mark waiting uploads
+        env:
+          SITE_WM_KEY: ${{ secrets.SITE_WM_KEY }}
+        run: python3 site_watermark.py
